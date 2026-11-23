@@ -73,10 +73,41 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Process faces in background (don't await - let it happen async)
-        processFaces(photo.id, buffer).catch((err) =>
-          console.error(`Face processing failed for ${photo.id}:`, err)
-        );
+        // Check if faces were extracted by client-side AI
+        const clientFacesJson = (formData.get(`faces_${file.name}`) || formData.get('faces')) as string;
+        let clientProcessed = false;
+
+        if (clientFacesJson) {
+          try {
+            const faces = JSON.parse(clientFacesJson);
+            if (Array.isArray(faces) && faces.length > 0) {
+              await prisma.faceDescriptor.createMany({
+                data: faces.map((face: any) => ({
+                  descriptor: JSON.stringify(face.descriptor),
+                  x: Number(face.box?.x ?? 0),
+                  y: Number(face.box?.y ?? 0),
+                  width: Number(face.box?.width ?? 0),
+                  height: Number(face.box?.height ?? 0),
+                  photoId: photo.id,
+                })),
+              });
+              await prisma.photo.update({
+                where: { id: photo.id },
+                data: { faceProcessed: true },
+              });
+              clientProcessed = true;
+            }
+          } catch (err) {
+            console.error('Failed to save client faces:', err);
+          }
+        }
+
+        if (!clientProcessed) {
+          // Process faces in background (don't await - let it happen async)
+          processFaces(photo.id, buffer).catch((err) =>
+            console.error(`Face processing failed for ${photo.id}:`, err)
+          );
+        }
 
         uploadedPhotos.push(photo);
       } catch (error) {

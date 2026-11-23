@@ -65,19 +65,34 @@ export default function GalleryPage() {
     }
   };
 
-  const handleSelfieCapture = async (imageBlob: Blob) => {
+  const handleSelfieCapture = async (imageBlob: Blob, descriptor?: number[]) => {
     setMatchLoading(true);
     setMatchError(null);
 
     try {
-      const formData = new FormData();
-      formData.append('selfie', imageBlob, 'selfie.jpg');
-      formData.append('accessCode', code);
+      let res: Response;
 
-      const res = await fetch('/api/face/match', {
-        method: 'POST',
-        body: formData,
-      });
+      if (descriptor && descriptor.length === 128) {
+        // High accuracy: send 128-d neural network face embedding directly
+        res = await fetch('/api/face/match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accessCode: code,
+            descriptor,
+          }),
+        });
+      } else {
+        // Fallback: send image blob
+        const formData = new FormData();
+        formData.append('selfie', imageBlob, 'selfie.jpg');
+        formData.append('accessCode', code);
+
+        res = await fetch('/api/face/match', {
+          method: 'POST',
+          body: formData,
+        });
+      }
 
       const data = await res.json();
 

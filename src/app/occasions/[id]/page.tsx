@@ -6,12 +6,13 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, QrCode, Upload, Image, Trash2,
-  Loader2, Calendar, AlertCircle
+  Loader2, Calendar, Sparkles, CheckCircle
 } from 'lucide-react';
 import PhotoUploader from '@/components/PhotoUploader';
 import PhotoGallery from '@/components/PhotoGallery';
 import QRCodeDisplay from '@/components/QRCodeDisplay';
 import { formatDate } from '@/lib/utils';
+import { loadFaceModels, detectAllFacesInImage } from '@/lib/face-client';
 
 interface Photo {
   id: string;
@@ -45,6 +46,8 @@ export default function OccasionPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'photos' | 'upload' | 'qr'>('photos');
   const [deleting, setDeleting] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexStatus, setReindexStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (session) {
@@ -65,6 +68,55 @@ export default function OccasionPage() {
       console.error('Error fetching occasion:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const reindexAllPhotos = async () => {
+    if (!occasion || occasion.photos.length === 0) return;
+    setReindexing(true);
+    setReindexStatus('Loading AI face models...');
+
+    try {
+      await loadFaceModels();
+      let totalFacesFound = 0;
+
+      for (let i = 0; i < occasion.photos.length; i++) {
+        const photo = occasion.photos[i];
+        setReindexStatus(`Scanning photo ${i + 1} of ${occasion.photos.length} (${photo.fileName})...`);
+
+        // Load image element
+        const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
+
+        const imgLoaded = new Promise<boolean>((resolve) => {
+          img.onload = () => resolve(true);
+          img.onerror = () => resolve(false);
+          img.src = `/api/photos/serve?path=${encodeURIComponent(photo.thumbnailPath || photo.originalPath)}`;
+        });
+
+        const success = await imgLoaded;
+        if (!success) continue;
+
+        // Detect all faces with real neural network
+        const faces = await detectAllFacesInImage(img);
+        totalFacesFound += faces.length;
+
+        // Post faces to server
+        await fetch(`/api/photos/${photo.id}/faces`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ faces }),
+        });
+      }
+
+      setReindexStatus(`Successfully indexed ${totalFacesFound} face(s) across ${occasion.photos.length} photos!`);
+      setTimeout(() => setReindexStatus(null), 4000);
+      fetchOccasion();
+    } catch (err) {
+      console.error('Re-indexing error:', err);
+      setReindexStatus('Failed to re-index some photos.');
+    } finally {
+      setReindexing(false);
     }
   };
 
@@ -130,7 +182,7 @@ export default function OccasionPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200 mb-6">
+      <div className="border-b border-gray-200 mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex space-x-8">
           {[
             { id: 'photos' as const, label: 'Photos', icon: Image },
@@ -151,6 +203,30 @@ export default function OccasionPage() {
             </button>
           ))}
         </div>
+
+        {activeTab === 'photos' && occasion.photos.length > 0 && (
+          <div className="flex items-center space-x-3">
+            {reindexStatus && (
+              <span className="text-xs text-primary-600 font-medium animate-pulse flex items-center space-x-1">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>{reindexStatus}</span>
+              </span>
+            )}
+            <button
+              onClick={reindexAllPhotos}
+              disabled={reindexing}
+              className="btn-secondary text-xs inline-flex items-center space-x-1.5 py-1.5 px-3"
+              title="Rescan all photos with AI neural network to detect faces"
+            >
+              {reindexing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary-600" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5 text-primary-600" />
+              )}
+              <span>{reindexing ? 'Scanning with AI...' : 'Scan / Re-index Faces with AI'}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tab Content */}
