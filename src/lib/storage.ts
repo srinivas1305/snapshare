@@ -7,6 +7,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
@@ -173,6 +174,49 @@ export async function deletePhoto(originalPath: string, thumbnailPath: string | 
     }
   } catch (error) {
     console.error('Error deleting photo files:', error);
+  }
+}
+
+export async function deletePhotos(
+  photos: Array<{ originalPath: string; thumbnailPath: string | null }>
+) {
+  if (!photos || photos.length === 0) return;
+
+  if (isS3Enabled && s3Client) {
+    const keys: string[] = [];
+    for (const p of photos) {
+      if (p.originalPath) keys.push(p.originalPath);
+      if (p.thumbnailPath) keys.push(p.thumbnailPath);
+    }
+
+    if (keys.length > 0) {
+      // S3 DeleteObjects supports up to 1000 keys per request
+      const chunkSize = 1000;
+      for (let i = 0; i < keys.length; i += chunkSize) {
+        const chunk = keys.slice(i, i + chunkSize);
+        try {
+          await s3Client.send(
+            new DeleteObjectsCommand({
+              Bucket: S3_BUCKET,
+              Delete: {
+                Objects: chunk.map((Key) => ({ Key })),
+                Quiet: true,
+              },
+            })
+          );
+        } catch (err) {
+          console.error('Error batch deleting objects from S3, falling back to individual deletes:', err);
+          for (const key of chunk) {
+            await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key })).catch(() => {});
+          }
+        }
+      }
+    }
+  } else {
+    // Local filesystem delete
+    for (const p of photos) {
+      await deletePhoto(p.originalPath, p.thumbnailPath);
+    }
   }
 }
 
