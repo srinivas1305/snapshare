@@ -7,8 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "postinstall": "prisma generate",
-    "vercel-build": "node scripts/switch-db.js postgresql && prisma db push && next build",
+    "vercel-build": "node scripts/switch-db.js postgresql && npx prisma db push && next build",
     "db:use-postgres": "node scripts/switch-db.js postgresql",
     "db:use-sqlite": "node scripts/switch-db.js sqlite",
     "db:push": "prisma db push",
@@ -49,11 +48,5 @@
     "prisma": "^5.20.0",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.3"
-  },
-  "allowScripts": {
-    "@prisma/client@5.22.0": true,
-    "prisma@5.22.0": true,
-    "sharp@0.33.5": true,
-    "@prisma/engines@5.22.0": true
   }
 }
