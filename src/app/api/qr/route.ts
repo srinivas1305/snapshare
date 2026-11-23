@@ -31,7 +31,11 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
     }
 
-    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    // Dynamically detect domain from request headers (works seamlessly on Vercel or custom domains)
+    const host = request.headers.get('x-forwarded-host') || request.headers.get('host');
+    const proto = request.headers.get('x-forwarded-proto') || (host?.includes('localhost') ? 'http' : 'https');
+    const dynamicBase = host ? `${proto}://${host}` : null;
+    const baseUrl = dynamicBase || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const galleryUrl = `${baseUrl}/gallery/${occasion.accessCode}`;
 
     const qrDataUrl = await QRCode.toDataURL(galleryUrl, {
