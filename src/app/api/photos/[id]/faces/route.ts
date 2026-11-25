@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
+import { getOccasionAccess } from '@/lib/occasion-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,24 +24,23 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid faces array' }, { status: 400 });
     }
 
-    // Verify ownership
-    const photo = await prisma.photo.findFirst({
-      where: {
-        id: photoId,
-        uploadedById: (session.user as any).id,
-      },
+    const photo = await prisma.photo.findUnique({
+      where: { id: photoId },
     });
 
     if (!photo) {
       return NextResponse.json({ error: 'Photo not found' }, { status: 404 });
     }
 
-    // Delete any old descriptors for this photo
+    const access = await getOccasionAccess(photo.occasionId, session.user.id, session.user.email);
+    if (!access && photo.uploadedById !== session.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
     await prisma.faceDescriptor.deleteMany({
       where: { photoId },
     });
 
-    // Insert new FaceNet descriptors
     if (faces.length > 0) {
       await prisma.faceDescriptor.createMany({
         data: faces.map((face: any) => ({

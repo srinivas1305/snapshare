@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, X, CheckCircle, AlertCircle, Loader2, Sparkles } from 'lucide-react';
 import { formatFileSize } from '@/lib/utils';
 import { fileToImageElement, detectAllFacesInImage, loadFaceModels } from '@/lib/face-client';
 
@@ -24,118 +23,69 @@ export default function PhotoUploader({ occasionId, onUploadComplete }: PhotoUpl
   const [statusText, setStatusText] = useState<string | null>(null);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles = acceptedFiles.map((file) => ({
-      file,
-      status: 'pending' as const,
-    }));
+    const newFiles = acceptedFiles.map((file) => ({ file, status: 'pending' as const }));
     setFiles((prev) => [...prev, ...newFiles]);
-
-    // Preload face models in background
     loadFaceModels().catch(() => {});
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'image/jpeg': ['.jpg', '.jpeg'],
-      'image/png': ['.png'],
-      'image/webp': ['.webp'],
-      'image/tiff': ['.tiff', '.tif'],
-    },
-    maxSize: 52428800, // 50MB
+    accept: { 'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'], 'image/tiff': ['.tiff', '.tif'] },
+    maxSize: 52428800,
   });
 
-  const removeFile = (index: number) => {
-    setFiles((prev) => prev.filter((_, i) => i !== index));
-  };
+  const removeFile = (index: number) => setFiles((prev) => prev.filter((_, i) => i !== index));
 
   const uploadFiles = async () => {
     if (files.length === 0) return;
     setUploading(true);
-
     const batchSize = 3;
+
     for (let i = 0; i < files.length; i += batchSize) {
       const batch = files.slice(i, i + batchSize);
       const formData = new FormData();
       formData.append('occasionId', occasionId);
 
-      // Step 1: Scan faces in each photo using client AI
       for (let j = 0; j < batch.length; j++) {
         const fileObj = batch[j];
-        const overallIndex = i + j;
-
+        const idx = i + j;
         if (fileObj.status !== 'pending') continue;
-
         formData.append('photos', fileObj.file);
 
-        // Update status to scanning
-        setFiles((prev) =>
-          prev.map((f, idx) =>
-            idx === overallIndex ? { ...f, status: 'scanning' as const } : f
-          )
-        );
-        setStatusText(`Scanning faces in ${fileObj.file.name}...`);
+        setFiles((prev) => prev.map((f, k) => k === idx ? { ...f, status: 'scanning' as const } : f));
+        setStatusText(`Detecting faces in ${fileObj.file.name}...`);
 
         try {
           const img = await fileToImageElement(fileObj.file);
           const faces = await detectAllFacesInImage(img);
-
-          if (faces.length > 0) {
-            formData.append(`faces_${fileObj.file.name}`, JSON.stringify(faces));
-          }
-
-          setFiles((prev) =>
-            prev.map((f, idx) =>
-              idx === overallIndex
-                ? { ...f, status: 'uploading' as const, faceCount: faces.length }
-                : f
-            )
-          );
-        } catch (err) {
-          console.warn('Face scan failed, uploading photo without client embeddings:', err);
-          setFiles((prev) =>
-            prev.map((f, idx) =>
-              idx === overallIndex ? { ...f, status: 'uploading' as const } : f
-            )
-          );
+          if (faces.length > 0) formData.append(`faces_${fileObj.file.name}`, JSON.stringify(faces));
+          setFiles((prev) => prev.map((f, k) => k === idx ? { ...f, status: 'uploading' as const, faceCount: faces.length } : f));
+        } catch {
+          setFiles((prev) => prev.map((f, k) => k === idx ? { ...f, status: 'uploading' as const } : f));
         }
       }
 
       setStatusText(`Uploading batch ${Math.floor(i / batchSize) + 1}...`);
 
       try {
-        const res = await fetch('/api/photos/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        const data = await res.json();
-
+        const res = await fetch('/api/photos/upload', { method: 'POST', body: formData });
         if (res.ok) {
-          setFiles((prev) =>
-            prev.map((f, idx) =>
-              idx >= i && idx < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
-                ? { ...f, status: 'success' as const }
-                : f
-            )
-          );
+          setFiles((prev) => prev.map((f, k) =>
+            k >= i && k < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
+              ? { ...f, status: 'success' as const } : f
+          ));
         } else {
-          setFiles((prev) =>
-            prev.map((f, idx) =>
-              idx >= i && idx < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
-                ? { ...f, status: 'error' as const, error: data.error }
-                : f
-            )
-          );
+          const data = await res.json();
+          setFiles((prev) => prev.map((f, k) =>
+            k >= i && k < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
+              ? { ...f, status: 'error' as const, error: data.error } : f
+          ));
         }
-      } catch (error) {
-        setFiles((prev) =>
-          prev.map((f, idx) =>
-            idx >= i && idx < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
-              ? { ...f, status: 'error' as const, error: 'Upload failed' }
-              : f
-          )
-        );
+      } catch {
+        setFiles((prev) => prev.map((f, k) =>
+          k >= i && k < i + batchSize && (f.status === 'uploading' || f.status === 'scanning')
+            ? { ...f, status: 'error' as const, error: 'Upload failed' } : f
+        ));
       }
     }
 
@@ -151,24 +101,20 @@ export default function PhotoUploader({ occasionId, onUploadComplete }: PhotoUpl
     <div className="space-y-4">
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
-          isDragActive
-            ? 'border-primary-500 bg-primary-50'
-            : 'border-gray-300 hover:border-primary-400 hover:bg-gray-50'
+        className={`border border-dashed rounded p-8 text-center cursor-pointer transition-colors duration-150 ${
+          isDragActive ? 'border-neutral-900 bg-neutral-50' : 'border-neutral-300 hover:border-neutral-400'
         }`}
       >
         <input {...getInputProps()} />
-        <Upload className="h-12 w-12 mx-auto text-gray-400 mb-4" />
         {isDragActive ? (
-          <p className="text-primary-600 font-medium">Drop photos here...</p>
+          <p className="text-sm text-neutral-900 font-medium">Drop photos here</p>
         ) : (
           <>
-            <p className="text-gray-600 font-medium">Drag & drop photos here</p>
-            <p className="text-gray-400 text-sm mt-1">or click to browse</p>
-            <div className="flex items-center justify-center space-x-1 mt-2 text-xs text-primary-600 font-medium">
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Automatic AI Face Detection Enabled</span>
-            </div>
+            <p className="text-sm text-neutral-600">Drag photos here or click to browse</p>
+            <p className="text-xs text-neutral-400 mt-1">JPG, PNG, WebP, TIFF — up to 50 MB each</p>
+            <p className="text-[10px] font-mono text-neutral-300 mt-2 uppercase tracking-wide">
+              Face detection runs automatically on upload
+            </p>
           </>
         )}
       </div>
@@ -177,67 +123,39 @@ export default function PhotoUploader({ occasionId, onUploadComplete }: PhotoUpl
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-gray-600">
-                {files.length} file(s) • {successCount} uploaded
-              </p>
-              {statusText && (
-                <p className="text-xs text-primary-600 mt-0.5 animate-pulse font-medium">
-                  {statusText}
-                </p>
-              )}
+              <p className="text-xs text-neutral-500">{files.length} file{files.length !== 1 ? 's' : ''} · {successCount} uploaded</p>
+              {statusText && <p className="text-[10px] font-mono text-accent mt-0.5">{statusText}</p>}
             </div>
-            <div className="space-x-2">
+            <div className="flex gap-2">
               {successCount > 0 && successCount === files.length && (
-                <button
-                  onClick={() => setFiles([])}
-                  className="text-sm text-gray-500 hover:text-gray-700"
-                >
-                  Clear all
-                </button>
+                <button onClick={() => setFiles([])} className="text-xs text-neutral-400 hover:text-neutral-600 transition-colors">Clear</button>
               )}
               {pendingCount > 0 && (
-                <button
-                  onClick={uploadFiles}
-                  disabled={uploading}
-                  className="btn-primary text-sm"
-                >
-                  {uploading ? (
-                    <>
-                      <Loader2 className="inline h-4 w-4 mr-1 animate-spin" />
-                      Processing AI...
-                    </>
-                  ) : (
-                    `Upload ${pendingCount} photo(s)`
-                  )}
+                <button onClick={uploadFiles} disabled={uploading} className="btn-primary text-xs py-1.5 px-3">
+                  {uploading ? 'Processing...' : `Upload ${pendingCount}`}
                 </button>
               )}
             </div>
           </div>
 
-          <div className="max-h-60 overflow-y-auto space-y-1">
+          <div className="max-h-48 overflow-y-auto space-y-px">
             {files.map((f, index) => (
-              <div
-                key={index}
-                className="flex items-center justify-between p-2 rounded-lg bg-gray-50"
-              >
-                <div className="flex items-center space-x-3 min-w-0">
-                  {f.status === 'pending' && <div className="h-4 w-4 rounded-full bg-gray-300" />}
-                  {f.status === 'scanning' && <Loader2 className="h-4 w-4 text-purple-600 animate-spin" />}
-                  {f.status === 'uploading' && <Loader2 className="h-4 w-4 text-primary-500 animate-spin" />}
-                  {f.status === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                  {f.status === 'error' && <AlertCircle className="h-4 w-4 text-red-500" />}
-                  <span className="text-sm text-gray-700 truncate">{f.file.name}</span>
-                  <span className="text-xs text-gray-400">{formatFileSize(f.file.size)}</span>
+              <div key={index} className="flex items-center justify-between py-1.5 px-2 rounded text-xs hover:bg-neutral-50 transition-colors duration-150">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    f.status === 'success' ? 'bg-green-500' :
+                    f.status === 'error' ? 'bg-red-500' :
+                    f.status === 'scanning' || f.status === 'uploading' ? 'bg-amber-400 animate-pulse' :
+                    'bg-neutral-300'
+                  }`} />
+                  <span className="text-neutral-700 truncate">{f.file.name}</span>
+                  <span className="text-neutral-300 font-mono shrink-0">{formatFileSize(f.file.size)}</span>
                   {f.faceCount !== undefined && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
-                      {f.faceCount} face{f.faceCount === 1 ? '' : 's'} found
-                    </span>
+                    <span className="text-neutral-400 font-mono shrink-0">{f.faceCount} face{f.faceCount === 1 ? '' : 's'}</span>
                   )}
                 </div>
                 {f.status === 'pending' && (
-                  <button onClick={() => removeFile(index)} className="text-gray-400 hover:text-gray-600">
-                    <X className="h-4 w-4" />
-                  </button>
+                  <button onClick={() => removeFile(index)} className="text-neutral-300 hover:text-neutral-500 ml-2 transition-colors">×</button>
                 )}
               </div>
             ))}

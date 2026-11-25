@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Download, Copy, Check, Loader2 } from 'lucide-react';
 
 interface QRCodeDisplayProps {
   occasionId: string;
@@ -11,28 +10,21 @@ export default function QRCodeDisplay({ occasionId }: QRCodeDisplayProps) {
   const [qrData, setQrData] = useState<{
     qrCode: string;
     galleryUrl: string;
+    slideshowUrl: string;
     accessCode: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<'gallery' | 'slideshow' | null>(null);
 
   useEffect(() => {
-    fetchQR();
+    fetch(`/api/qr?occasionId=${occasionId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.qrCode) setQrData(data);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, [occasionId]);
-
-  const fetchQR = async () => {
-    try {
-      const res = await fetch(`/api/qr?occasionId=${occasionId}`);
-      const data = await res.json();
-      if (res.ok) {
-        setQrData(data);
-      }
-    } catch (error) {
-      console.error('Error fetching QR:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const downloadQR = () => {
     if (!qrData) return;
@@ -42,49 +34,81 @@ export default function QRCodeDisplay({ occasionId }: QRCodeDisplayProps) {
     link.click();
   };
 
-  const copyLink = async () => {
-    if (!qrData) return;
-    await navigator.clipboard.writeText(qrData.galleryUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyLink = async (url: string, key: 'gallery' | 'slideshow') => {
+    await navigator.clipboard.writeText(url);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+      <div className="flex items-center justify-center py-12">
+        <div className="w-5 h-5 border-2 border-neutral-200 border-t-neutral-900 rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!qrData) {
-    return <p className="text-gray-500">Failed to generate QR code</p>;
+    return <p className="text-sm text-neutral-500">Could not generate QR code.</p>;
   }
 
   return (
-    <div className="text-center space-y-4">
-      <img
-        src={qrData.qrCode}
-        alt="QR Code"
-        className="mx-auto w-64 h-64 rounded-xl shadow-lg"
-      />
-      <div>
-        <p className="text-sm text-gray-500">Access Code</p>
-        <p className="text-2xl font-bold text-primary-700 tracking-widest">
+    <div className="space-y-6">
+      <div className="border border-neutral-200 rounded p-6 bg-white flex flex-col items-center text-center">
+        <img
+          src={qrData.qrCode}
+          alt={`QR code for ${qrData.accessCode}`}
+          className="w-52 h-52 border border-neutral-100"
+        />
+        <p className="text-[11px] font-mono text-neutral-400 uppercase tracking-wider mt-5">
+          Access code
+        </p>
+        <p className="text-2xl font-mono font-bold text-neutral-900 tracking-[0.22em] mt-1">
           {qrData.accessCode}
         </p>
+        <div className="flex items-center gap-2 mt-5">
+          <button onClick={downloadQR} className="btn-primary text-xs">
+            Download PNG
+          </button>
+          <button
+            onClick={() => copyLink(qrData.galleryUrl, 'gallery')}
+            className="btn-secondary text-xs"
+          >
+            {copiedKey === 'gallery' ? 'Copied' : 'Copy gallery URL'}
+          </button>
+        </div>
       </div>
-      <div className="flex justify-center space-x-2">
-        <button onClick={downloadQR} className="btn-secondary text-sm flex items-center space-x-1">
-          <Download className="h-4 w-4" />
-          <span>Download QR</span>
-        </button>
-        <button onClick={copyLink} className="btn-secondary text-sm flex items-center space-x-1">
-          {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-          <span>{copied ? 'Copied!' : 'Copy Link'}</span>
-        </button>
+
+      <div className="border border-neutral-200 rounded divide-y divide-neutral-100 text-xs">
+        <div className="p-3.5 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-[10px] text-neutral-400 uppercase tracking-wider">
+              Guest gallery link
+            </p>
+            <p className="font-mono text-neutral-700 truncate mt-0.5">{qrData.galleryUrl}</p>
+          </div>
+          <button
+            onClick={() => copyLink(qrData.galleryUrl, 'gallery')}
+            className="btn-secondary text-xs py-1 px-2.5 shrink-0"
+          >
+            {copiedKey === 'gallery' ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+        <div className="p-3.5 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-[10px] text-neutral-400 uppercase tracking-wider">
+              Projector slideshow link
+            </p>
+            <p className="font-mono text-neutral-700 truncate mt-0.5">{qrData.slideshowUrl}</p>
+          </div>
+          <button
+            onClick={() => copyLink(qrData.slideshowUrl, 'slideshow')}
+            className="btn-secondary text-xs py-1 px-2.5 shrink-0"
+          >
+            {copiedKey === 'slideshow' ? 'Copied' : 'Copy'}
+          </button>
+        </div>
       </div>
-      <p className="text-xs text-gray-400 break-all">{qrData.galleryUrl}</p>
     </div>
   );
 }

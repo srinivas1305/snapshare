@@ -8,29 +8,42 @@ datasource db {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
-  name         String
-  passwordHash String
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  occasions    Occasion[]
-  photos       Photo[]
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String
+  passwordHash  String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  occasions     Occasion[]
+  photos        Photo[]
+  collaborators Collaborator[]
 }
 
 model Occasion {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  date        DateTime
-  accessCode  String   @unique
-  coverImage  String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  photos      Photo[]
+  id                String          @id @default(cuid())
+  name              String
+  description       String?
+  date              DateTime
+  accessCode        String          @unique
+  coverImage        String?
+  isActive          Boolean         @default(true)
+  // Custom branding
+  brandName         String?
+  accentColor       String          @default("#18181b")
+  logoUrl           String?
+  photographerBio   String?
+  // Live slideshow
+  slideshowEnabled  Boolean         @default(false)
+  slideshowInterval Int             @default(5)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  userId            String
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photos            Photo[]
+  collaborators     Collaborator[]
+  viewEvents        ViewEvent[]
+  smartAlbums       SmartAlbum[]
+  photoDeliveries   PhotoDelivery[]
 
   @@index([accessCode])
   @@index([userId])
@@ -52,20 +65,84 @@ model Photo {
   uploadedById    String
   uploadedBy      User             @relation(fields: [uploadedById], references: [id])
   faceDescriptors FaceDescriptor[]
+  viewEvents      ViewEvent[]
 
   @@index([occasionId])
   @@index([uploadedById])
 }
 
 model FaceDescriptor {
-  id         String @id @default(cuid())
-  descriptor String // JSON string of Float32Array (128 values)
-  x          Float  // bounding box
-  y          Float
-  width      Float
-  height     Float
-  photoId    String
-  photo      Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  id          String       @id @default(cuid())
+  descriptor  String
+  x           Float
+  y           Float
+  width       Float
+  height      Float
+  photoId     String
+  photo       Photo        @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  smartAlbums SmartAlbum[]
 
   @@index([photoId])
+}
+
+model Collaborator {
+  id           String   @id @default(cuid())
+  occasionId   String
+  occasion     Occasion @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id])
+  invitedEmail String
+  role         String   @default("EDITOR")
+  status       String   @default("PENDING")
+  createdAt    DateTime @default(now())
+
+  @@index([occasionId])
+  @@index([userId])
+  @@index([invitedEmail])
+}
+
+model ViewEvent {
+  id         String   @id @default(cuid())
+  occasionId String
+  occasion   Occasion @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  photoId    String?
+  photo      Photo?   @relation(fields: [photoId], references: [id], onDelete: SetNull)
+  eventType  String
+  ipHash     String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([occasionId])
+  @@index([photoId])
+  @@index([eventType])
+}
+
+model SmartAlbum {
+  id                 String          @id @default(cuid())
+  occasionId         String
+  occasion           Occasion        @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  name               String
+  type               String          @default("PERSON")
+  faceDescriptorId   String?
+  faceDescriptor     FaceDescriptor? @relation(fields: [faceDescriptorId], references: [id], onDelete: SetNull)
+  centroidDescriptor String?
+  coverPhotoId       String?
+  createdAt          DateTime        @default(now())
+
+  @@index([occasionId])
+}
+
+model PhotoDelivery {
+  id             String    @id @default(cuid())
+  occasionId     String
+  occasion       Occasion  @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  channel        String    @default("EMAIL")
+  recipientEmail String?
+  recipientPhone String?
+  photoIds       String
+  status         String    @default("PENDING")
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([occasionId])
 }

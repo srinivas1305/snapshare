@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import prisma from '@/lib/prisma';
+import { getOccasionAccess } from '@/lib/occasion-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,29 +20,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Occasion ID is required' }, { status: 400 });
     }
 
-    const occasion = await prisma.occasion.findFirst({
-      where: {
-        id: occasionId,
-        userId: (session.user as any).id,
-      },
-    });
-
-    if (!occasion) {
+    const access = await getOccasionAccess(occasionId, session.user.id, session.user.email);
+    if (!access) {
       return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
     }
 
-    // Dynamically detect domain from request headers (works seamlessly on Vercel or custom domains)
+    const occasion = access.occasion;
     const host = request.headers.get('x-forwarded-host') || request.headers.get('host');
     const proto = request.headers.get('x-forwarded-proto') || (host?.includes('localhost') ? 'http' : 'https');
     const dynamicBase = host ? `${proto}://${host}` : null;
     const baseUrl = dynamicBase || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const galleryUrl = `${baseUrl}/gallery/${occasion.accessCode}`;
+    const slideshowUrl = `${baseUrl}/gallery/${occasion.accessCode}/slideshow`;
 
     const qrDataUrl = await QRCode.toDataURL(galleryUrl, {
       width: 400,
       margin: 2,
       color: {
-        dark: '#1e3a8a',
+        dark: '#18181b',
         light: '#ffffff',
       },
       errorCorrectionLevel: 'H',
@@ -51,6 +46,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       qrCode: qrDataUrl,
       galleryUrl,
+      slideshowUrl,
       accessCode: occasion.accessCode,
     });
   } catch (error) {

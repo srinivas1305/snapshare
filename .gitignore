@@ -38,8 +38,10 @@ next-env.d.ts
 # uploads
 /uploads/originals/*
 /uploads/thumbnails/*
+/uploads/logos/*
 !/uploads/originals/.gitkeep
 !/uploads/thumbnails/.gitkeep
+!/uploads/logos/.gitkeep
 
 # database
 prisma/dev.db

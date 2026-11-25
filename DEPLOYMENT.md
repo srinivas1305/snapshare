@@ -55,6 +55,8 @@ git push -u origin main
 | `S3_ACCESS_KEY_ID` | `...` | Cloudflare R2 or AWS S3 API Token Access Key |
 | `S3_SECRET_ACCESS_KEY` | `...` | Cloudflare R2 or AWS S3 API Token Secret Key |
 | `S3_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` | (Optional, required for Cloudflare R2 / MinIO) |
+| `RESEND_API_KEY` | `re_...` | (Optional) Enables direct automated Email photo pack delivery |
+| `EMAIL_FROM` | `SnapShare <photos@yourdomain.com>` | (Optional) Sender address when `RESEND_API_KEY` is configured |
 
 4. Click **Deploy**!
 

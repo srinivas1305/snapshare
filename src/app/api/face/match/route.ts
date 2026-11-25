@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { extractFaces } from '@/lib/face-recognition';
+import { recordViewEvent } from '@/lib/analytics';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,10 +50,9 @@ export async function POST(request: NextRequest) {
           if (Array.isArray(parsed) && parsed.length === 128) {
             selfieDescriptor = parsed;
           }
-        } catch {}
+        } catch { /* ignore */ }
       }
 
-      // Fallback: extract from selfie image file if client didn't supply descriptor
       if (!selfieDescriptor) {
         const selfie = formData.get('selfie') as File;
         if (selfie) {
@@ -76,7 +76,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find the occasion
     const occasion = await prisma.occasion.findUnique({
       where: { accessCode },
     });
@@ -85,7 +84,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
     }
 
-    // Get all face descriptors for this occasion's photos
+    if (!occasion.isActive) {
+      return NextResponse.json({ error: 'This gallery is no longer active' }, { status: 403 });
+    }
+
     const storedDescriptors = await prisma.faceDescriptor.findMany({
       where: {
         photo: {
@@ -98,10 +100,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Score and match
     const photoBestDistance = new Map<string, number>();
-
-    // Standard FaceNet threshold: distance < 0.60 is standard match; < 0.65 allows slight lighting variations
     const MATCH_THRESHOLD = 0.62;
 
     for (const stored of storedDescriptors) {
@@ -110,7 +109,6 @@ export async function POST(request: NextRequest) {
         const dist = euclideanDistance(selfieDescriptor, storedVec);
         const sim = cosineSimilarity(selfieDescriptor, storedVec);
 
-        // Match if euclidean distance <= 0.62 OR cosine similarity >= 0.80
         if (dist <= MATCH_THRESHOLD || sim >= 0.80) {
           const existing = photoBestDistance.get(stored.photoId);
           if (existing === undefined || dist < existing) {
@@ -124,18 +122,22 @@ export async function POST(request: NextRequest) {
 
     const matchedPhotoIds = Array.from(photoBestDistance.keys());
 
-    // Fetch matched photos
     const matchedPhotos = await prisma.photo.findMany({
       where: {
         id: { in: matchedPhotoIds },
       },
     });
 
-    // Sort by best match distance (lowest distance first)
     matchedPhotos.sort((a, b) => {
       const distA = photoBestDistance.get(a.id) ?? Infinity;
       const distB = photoBestDistance.get(b.id) ?? Infinity;
       return distA - distB;
+    });
+
+    await recordViewEvent({
+      occasionId: occasion.id,
+      eventType: 'FACE_MATCH',
+      request,
     });
 
     return NextResponse.json({
