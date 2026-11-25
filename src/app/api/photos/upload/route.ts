@@ -4,8 +4,7 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { savePhoto } from '@/lib/storage';
 import { extractFaces } from '@/lib/face-recognition';
-import fs from 'fs/promises';
-import path from 'path';
+import { getOccasionAccess } from '@/lib/occasion-access';
 
 const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE || '52428800'); // 50MB
 
@@ -28,15 +27,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No files provided' }, { status: 400 });
     }
 
-    // Verify occasion exists and user has access
-    const occasion = await prisma.occasion.findFirst({
-      where: {
-        id: occasionId,
-        userId: (session.user as any).id,
-      },
-    });
-
-    if (!occasion) {
+    // Verify user is occasion owner or accepted collaborator
+    const access = await getOccasionAccess(occasionId, session.user.id, session.user.email);
+    if (!access) {
       return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
     }
 
@@ -69,28 +62,29 @@ export async function POST(request: NextRequest) {
             width: photoData.width,
             height: photoData.height,
             occasionId,
-            uploadedById: (session.user as any).id,
+            uploadedById: session.user.id,
           },
         });
 
-        // Check if faces were extracted by client-side AI
         const clientFacesJson = (formData.get(`faces_${file.name}`) || formData.get('faces')) as string;
         let clientProcessed = false;
 
         if (clientFacesJson) {
           try {
             const faces = JSON.parse(clientFacesJson);
-            if (Array.isArray(faces) && faces.length > 0) {
-              await prisma.faceDescriptor.createMany({
-                data: faces.map((face: any) => ({
-                  descriptor: JSON.stringify(face.descriptor),
-                  x: Number(face.box?.x ?? 0),
-                  y: Number(face.box?.y ?? 0),
-                  width: Number(face.box?.width ?? 0),
-                  height: Number(face.box?.height ?? 0),
-                  photoId: photo.id,
-                })),
-              });
+            if (Array.isArray(faces)) {
+              if (faces.length > 0) {
+                await prisma.faceDescriptor.createMany({
+                  data: faces.map((face: any) => ({
+                    descriptor: JSON.stringify(face.descriptor),
+                    x: Number(face.box?.x ?? 0),
+                    y: Number(face.box?.y ?? 0),
+                    width: Number(face.box?.width ?? 0),
+                    height: Number(face.box?.height ?? 0),
+                    photoId: photo.id,
+                  })),
+                });
+              }
               await prisma.photo.update({
                 where: { id: photo.id },
                 data: { faceProcessed: true },
@@ -103,7 +97,6 @@ export async function POST(request: NextRequest) {
         }
 
         if (!clientProcessed) {
-          // Process faces in background (don't await - let it happen async)
           processFaces(photo.id, buffer).catch((err) =>
             console.error(`Face processing failed for ${photo.id}:`, err)
           );
@@ -130,7 +123,6 @@ export async function POST(request: NextRequest) {
 async function processFaces(photoId: string, imageBuffer: Buffer) {
   try {
     const faces = await extractFaces(imageBuffer);
-    
     if (faces.length > 0) {
       await prisma.faceDescriptor.createMany({
         data: faces.map((face) => ({
@@ -143,7 +135,6 @@ async function processFaces(photoId: string, imageBuffer: Buffer) {
         })),
       });
     }
-
     await prisma.photo.update({
       where: { id: photoId },
       data: { faceProcessed: true },

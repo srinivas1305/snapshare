@@ -13,16 +13,16 @@ import {
 const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
 const ORIGINALS_DIR = path.join(UPLOAD_DIR, 'originals');
 const THUMBNAILS_DIR = path.join(UPLOAD_DIR, 'thumbnails');
+const LOGOS_DIR = path.join(UPLOAD_DIR, 'logos');
 
 const THUMBNAIL_WIDTH = 400;
 const THUMBNAIL_HEIGHT = 400;
 
-// S3 Configuration (Supports AWS S3, Cloudflare R2, Supabase Storage, MinIO)
 const S3_BUCKET = process.env.S3_BUCKET_NAME;
 const S3_REGION = process.env.S3_REGION || 'auto';
 const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY_ID;
 const S3_SECRET_KEY = process.env.S3_SECRET_ACCESS_KEY;
-const S3_ENDPOINT = process.env.S3_ENDPOINT; // e.g. https://<account_id>.r2.cloudflarestorage.com
+const S3_ENDPOINT = process.env.S3_ENDPOINT;
 
 const isS3Enabled = Boolean(S3_BUCKET && S3_ACCESS_KEY && S3_SECRET_KEY);
 
@@ -35,7 +35,6 @@ if (isS3Enabled) {
       accessKeyId: S3_ACCESS_KEY!,
       secretAccessKey: S3_SECRET_KEY!,
     },
-    // Required for some S3-compatible providers like MinIO or Cloudflare R2
     forcePathStyle: Boolean(process.env.S3_FORCE_PATH_STYLE === 'true'),
   });
 }
@@ -44,6 +43,7 @@ export async function ensureUploadDirs() {
   if (!isS3Enabled) {
     await fs.mkdir(ORIGINALS_DIR, { recursive: true });
     await fs.mkdir(THUMBNAILS_DIR, { recursive: true });
+    await fs.mkdir(LOGOS_DIR, { recursive: true });
   }
 }
 
@@ -71,7 +71,7 @@ export async function savePhoto(
   let thumbnailBuffer: Buffer;
 
   try {
-    const image = sharp(file);
+    const image = sharp(file).rotate();
     const metadata = await image.metadata();
     width = metadata.width || null;
     height = metadata.height || null;
@@ -81,7 +81,7 @@ export async function savePhoto(
         fit: 'cover',
         position: 'centre',
       })
-      .jpeg({ quality: 80 })
+      .jpeg({ quality: 82 })
       .toBuffer();
   } catch (error) {
     console.error('Error generating thumbnail with sharp, fallback to original:', error);
@@ -89,7 +89,6 @@ export async function savePhoto(
   }
 
   if (isS3Enabled && s3Client) {
-    // Upload original to S3
     await s3Client.send(
       new PutObjectCommand({
         Bucket: S3_BUCKET,
@@ -98,8 +97,6 @@ export async function savePhoto(
         ContentType: mimeType,
       })
     );
-
-    // Upload thumbnail to S3
     await s3Client.send(
       new PutObjectCommand({
         Bucket: S3_BUCKET,
@@ -109,12 +106,8 @@ export async function savePhoto(
       })
     );
   } else {
-    // Local filesystem storage
-    const originalLocalPath = path.join(ORIGINALS_DIR, uniqueName);
-    const thumbnailLocalPath = path.join(THUMBNAILS_DIR, `thumb_${uniqueName}`);
-
-    await fs.writeFile(originalLocalPath, file);
-    await fs.writeFile(thumbnailLocalPath, thumbnailBuffer);
+    await fs.writeFile(path.join(ORIGINALS_DIR, uniqueName), file);
+    await fs.writeFile(path.join(THUMBNAILS_DIR, `thumb_${uniqueName}`), thumbnailBuffer);
   }
 
   return {
@@ -125,6 +118,54 @@ export async function savePhoto(
     width,
     height,
   };
+}
+
+/**
+ * Save and normalize a studio brand logo (converted to crisp PNG <= 256px).
+ */
+export async function saveBrandLogo(file: Buffer): Promise<string> {
+  await ensureUploadDirs();
+
+  const uniqueName = `${uuidv4()}.png`;
+  const logoKey = `logos/${uniqueName}`;
+
+  const processed = await sharp(file)
+    .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
+    .png({ quality: 90 })
+    .toBuffer();
+
+  if (isS3Enabled && s3Client) {
+    await s3Client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: logoKey,
+        Body: processed,
+        ContentType: 'image/png',
+      })
+    );
+  } else {
+    await fs.writeFile(path.join(LOGOS_DIR, uniqueName), processed);
+  }
+
+  return logoKey;
+}
+
+export async function deleteSingleKey(relativePath: string | null | undefined) {
+  if (!relativePath) return;
+  try {
+    if (isS3Enabled && s3Client) {
+      await s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: S3_BUCKET,
+          Key: relativePath,
+        })
+      );
+    } else {
+      await fs.unlink(path.join(UPLOAD_DIR, relativePath)).catch(() => {});
+    }
+  } catch (error) {
+    console.error('Error deleting key:', relativePath, error);
+  }
 }
 
 export async function getPhotoBuffer(relativePath: string): Promise<Buffer> {
@@ -144,36 +185,14 @@ export async function getPhotoBuffer(relativePath: string): Promise<Buffer> {
     return Buffer.from(byteArray);
   }
 
-  // Local filesystem
   const fullPath = path.join(UPLOAD_DIR, relativePath);
   return await fs.readFile(fullPath);
 }
 
 export async function deletePhoto(originalPath: string, thumbnailPath: string | null) {
-  try {
-    if (isS3Enabled && s3Client) {
-      await s3Client.send(
-        new DeleteObjectCommand({
-          Bucket: S3_BUCKET,
-          Key: originalPath,
-        })
-      );
-      if (thumbnailPath) {
-        await s3Client.send(
-          new DeleteObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: thumbnailPath,
-          })
-        );
-      }
-    } else {
-      await fs.unlink(path.join(UPLOAD_DIR, originalPath)).catch(() => {});
-      if (thumbnailPath) {
-        await fs.unlink(path.join(UPLOAD_DIR, thumbnailPath)).catch(() => {});
-      }
-    }
-  } catch (error) {
-    console.error('Error deleting photo files:', error);
+  await deleteSingleKey(originalPath);
+  if (thumbnailPath) {
+    await deleteSingleKey(thumbnailPath);
   }
 }
 
@@ -190,7 +209,6 @@ export async function deletePhotos(
     }
 
     if (keys.length > 0) {
-      // S3 DeleteObjects supports up to 1000 keys per request
       const chunkSize = 1000;
       for (let i = 0; i < keys.length; i += chunkSize) {
         const chunk = keys.slice(i, i + chunkSize);
@@ -205,7 +223,7 @@ export async function deletePhotos(
             })
           );
         } catch (err) {
-          console.error('Error batch deleting objects from S3, falling back to individual deletes:', err);
+          console.error('Error batch deleting objects from S3, falling back:', err);
           for (const key of chunk) {
             await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: key })).catch(() => {});
           }
@@ -213,7 +231,6 @@ export async function deletePhotos(
       }
     }
   } else {
-    // Local filesystem delete
     for (const p of photos) {
       await deletePhoto(p.originalPath, p.thumbnailPath);
     }

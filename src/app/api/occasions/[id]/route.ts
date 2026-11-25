@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { deletePhotos } from '@/lib/storage';
+import { deletePhotos, deleteSingleKey } from '@/lib/storage';
+import { getOccasionAccess } from '@/lib/occasion-access';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,14 +17,26 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const occasion = await prisma.occasion.findFirst({
-      where: {
-        id: params.id,
-        userId: (session.user as any).id,
-      },
+    const access = await getOccasionAccess(params.id, session.user.id, session.user.email);
+    if (!access) {
+      return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
+    }
+
+    const occasion = await prisma.occasion.findUnique({
+      where: { id: params.id },
       include: {
+        user: { select: { id: true, name: true, email: true } },
         photos: {
           orderBy: { createdAt: 'desc' },
+          include: {
+            uploadedBy: { select: { id: true, name: true } },
+          },
+        },
+        collaborators: {
+          orderBy: { createdAt: 'desc' },
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+          },
         },
         _count: {
           select: { photos: true },
@@ -35,7 +48,10 @@ export async function GET(
       return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
     }
 
-    return NextResponse.json(occasion);
+    return NextResponse.json({
+      ...occasion,
+      role: access.role,
+    });
   } catch (error) {
     console.error('Error fetching occasion:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -52,26 +68,31 @@ export async function PUT(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const access = await getOccasionAccess(params.id, session.user.id, session.user.email);
+    if (!access || access.role !== 'OWNER') {
+      return NextResponse.json({ error: 'Only the occasion owner can update settings' }, { status: 403 });
+    }
+
     const body = await request.json();
 
-    const occasion = await prisma.occasion.updateMany({
-      where: {
-        id: params.id,
-        userId: (session.user as any).id,
-      },
+    const updated = await prisma.occasion.update({
+      where: { id: params.id },
       data: {
-        name: body.name,
-        description: body.description,
-        date: body.date ? new Date(body.date) : undefined,
-        isActive: body.isActive,
+        ...(body.name !== undefined ? { name: body.name.trim() } : {}),
+        ...(body.description !== undefined ? { description: body.description?.trim() || null } : {}),
+        ...(body.date !== undefined ? { date: new Date(body.date) } : {}),
+        ...(body.isActive !== undefined ? { isActive: Boolean(body.isActive) } : {}),
+        ...(body.brandName !== undefined ? { brandName: body.brandName?.trim() || null } : {}),
+        ...(body.accentColor !== undefined ? { accentColor: body.accentColor || '#18181b' } : {}),
+        ...(body.logoUrl !== undefined ? { logoUrl: body.logoUrl?.trim() || null } : {}),
+        ...(body.photographerBio !== undefined ? { photographerBio: body.photographerBio?.trim() || null } : {}),
+        ...(body.slideshowEnabled !== undefined ? { slideshowEnabled: Boolean(body.slideshowEnabled) } : {}),
+        ...(body.slideshowInterval !== undefined
+          ? { slideshowInterval: Math.max(2, Math.min(60, Number(body.slideshowInterval) || 5)) }
+          : {}),
       },
     });
 
-    if (occasion.count === 0) {
-      return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
-    }
-
-    const updated = await prisma.occasion.findUnique({ where: { id: params.id } });
     return NextResponse.json(updated);
   } catch (error) {
     console.error('Error updating occasion:', error);
@@ -89,11 +110,10 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // 1. Find the occasion and all associated photos before deleting
     const occasion = await prisma.occasion.findFirst({
       where: {
         id: params.id,
-        userId: (session.user as any).id,
+        userId: session.user.id,
       },
       include: {
         photos: {
@@ -106,15 +126,17 @@ export async function DELETE(
     });
 
     if (!occasion) {
-      return NextResponse.json({ error: 'Occasion not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Occasion not found or unauthorized' }, { status: 404 });
     }
 
-    // 2. Delete all photos and thumbnails from Cloudflare R2 / S3 storage
     if (occasion.photos.length > 0) {
       await deletePhotos(occasion.photos);
     }
 
-    // 3. Delete occasion from DB (cascades to photo and faceDescriptor rows)
+    if (occasion.logoUrl && occasion.logoUrl.startsWith('logos/')) {
+      await deleteSingleKey(occasion.logoUrl);
+    }
+
     await prisma.occasion.delete({
       where: { id: occasion.id },
     });

@@ -1,130 +1,145 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useSession, signOut } from 'next-auth/react';
-import { Camera, LogOut, Menu, X } from 'lucide-react';
 import { useState } from 'react';
 
 export default function Navbar() {
   const { data: session } = useSession();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const pathname = usePathname();
+  const [open, setOpen] = useState(false);
+
+  // Hide chrome in fullscreen projector slideshow mode
+  if (pathname?.endsWith('/slideshow')) {
+    return null;
+  }
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
-          <div className="flex items-center">
-            <Link href="/" className="flex items-center space-x-2">
-              <Camera className="h-8 w-8 text-primary-600" />
-              <span className="text-xl font-bold text-gray-900">SnapShare</span>
-            </Link>
-          </div>
+    <header className="sticky top-0 z-40 bg-white border-b border-neutral-200">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6">
+        <div className="flex items-center justify-between h-14">
+          <Link
+            href="/"
+            className="flex items-center gap-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-900 rounded"
+          >
+            <span className="w-6 h-6 bg-neutral-900 rounded flex items-center justify-center text-white text-[11px] font-mono font-bold tracking-tight">
+              S
+            </span>
+            <span className="text-sm font-display font-semibold tracking-tight text-neutral-900">
+              SnapShare
+            </span>
+          </Link>
 
-          {/* Desktop menu */}
-          <div className="hidden sm:flex sm:items-center sm:space-x-4">
+          <nav className="hidden sm:flex items-center gap-1">
             {session ? (
               <>
                 <Link
                   href="/dashboard"
-                  className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                  className={`text-sm px-3 py-1.5 rounded transition-colors duration-150 ${
+                    pathname === '/dashboard'
+                      ? 'text-neutral-900 font-medium bg-neutral-100'
+                      : 'text-neutral-500 hover:text-neutral-900'
+                  }`}
                 >
                   Dashboard
                 </Link>
                 <Link
                   href="/occasions/new"
-                  className="btn-primary text-sm"
+                  className={`text-sm px-3 py-1.5 rounded transition-colors duration-150 ${
+                    pathname === '/occasions/new'
+                      ? 'text-neutral-900 font-medium bg-neutral-100'
+                      : 'text-neutral-500 hover:text-neutral-900'
+                  }`}
                 >
-                  New Occasion
+                  New occasion
                 </Link>
-                <div className="flex items-center space-x-3 ml-4 pl-4 border-l border-gray-200">
-                  <span className="text-sm text-gray-600">{session.user?.name}</span>
-                  <button
-                    onClick={() => signOut({ callbackUrl: '/' })}
-                    className="text-gray-400 hover:text-gray-600"
-                    title="Sign out"
-                  >
-                    <LogOut className="h-5 w-5" />
-                  </button>
-                </div>
+                <span className="w-px h-4 bg-neutral-200 mx-2.5" aria-hidden="true" />
+                <span className="text-xs font-mono text-neutral-500 truncate max-w-[160px]">
+                  {session.user?.name}
+                </span>
+                <button
+                  onClick={() => signOut({ callbackUrl: '/' })}
+                  className="text-xs text-neutral-400 hover:text-neutral-900 ml-3 transition-colors duration-150"
+                >
+                  Sign out
+                </button>
               </>
             ) : (
               <>
                 <Link
                   href="/login"
-                  className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                  className="text-sm text-neutral-600 hover:text-neutral-900 px-3 py-1.5 rounded transition-colors duration-150"
                 >
-                  Login
+                  Log in
                 </Link>
-                <Link href="/register" className="btn-primary text-sm">
-                  Sign Up
+                <Link href="/register" className="btn-primary ml-2">
+                  Get started
                 </Link>
               </>
             )}
-          </div>
+          </nav>
 
-          {/* Mobile menu button */}
-          <div className="sm:hidden flex items-center">
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="text-gray-600 hover:text-gray-900"
-            >
-              {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-            </button>
-          </div>
+          <button
+            onClick={() => setOpen(!open)}
+            aria-label="Toggle navigation"
+            className="sm:hidden flex items-center justify-center w-8 h-8 text-neutral-600 hover:text-neutral-900"
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5">
+              {open ? <path d="M5 5l10 10M15 5L5 15" /> : <path d="M3 6h14M3 10h14M3 14h14" />}
+            </svg>
+          </button>
         </div>
       </div>
 
-      {/* Mobile menu */}
-      {mobileMenuOpen && (
-        <div className="sm:hidden bg-white border-b border-gray-200 pb-4">
-          <div className="px-4 space-y-2">
-            {session ? (
-              <>
-                <Link
-                  href="/dashboard"
-                  className="block text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
+      {open && (
+        <div className="sm:hidden border-t border-neutral-200 bg-white px-4 py-3 space-y-1">
+          {session ? (
+            <>
+              <Link
+                href="/dashboard"
+                onClick={() => setOpen(false)}
+                className="block text-sm text-neutral-700 hover:text-neutral-900 py-1.5"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/occasions/new"
+                onClick={() => setOpen(false)}
+                className="block text-sm text-neutral-700 hover:text-neutral-900 py-1.5"
+              >
+                New occasion
+              </Link>
+              <div className="border-t border-neutral-100 mt-2 pt-2 flex items-center justify-between">
+                <span className="text-xs text-neutral-400 font-mono">{session.user?.name}</span>
+                <button
+                  onClick={() => signOut({ callbackUrl: '/' })}
+                  className="text-xs text-red-600 hover:text-red-700 py-1"
                 >
-                  Dashboard
-                </Link>
-                <Link
-                  href="/occasions/new"
-                  className="block text-primary-600 hover:text-primary-700 px-3 py-2 rounded-md text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  New Occasion
-                </Link>
-                <div className="pt-2 border-t border-gray-100">
-                  <p className="px-3 py-1 text-sm text-gray-500">{session.user?.name}</p>
-                  <button
-                    onClick={() => signOut({ callbackUrl: '/' })}
-                    className="block w-full text-left text-red-600 hover:text-red-700 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Sign Out
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <Link
-                  href="/login"
-                  className="block text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  Login
-                </Link>
-                <Link
-                  href="/register"
-                  className="block text-primary-600 hover:text-primary-700 px-3 py-2 rounded-md text-sm font-medium"
-                  onClick={() => setMobileMenuOpen(false)}
-                >
-                  Sign Up
-                </Link>
-              </>
-            )}
-          </div>
+                  Sign out
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <Link
+                href="/login"
+                onClick={() => setOpen(false)}
+                className="block text-sm text-neutral-700 hover:text-neutral-900 py-1.5"
+              >
+                Log in
+              </Link>
+              <Link
+                href="/register"
+                onClick={() => setOpen(false)}
+                className="block text-sm font-medium text-accent hover:text-accent-hover py-1.5"
+              >
+                Get started
+              </Link>
+            </>
+          )}
         </div>
       )}
-    </nav>
+    </header>
   );
 }

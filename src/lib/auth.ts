@@ -2,6 +2,7 @@ import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import prisma from './prisma';
+import { syncUserCollaborations } from './occasion-access';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -16,8 +17,13 @@ export const authOptions: NextAuthOptions = {
           throw new Error('Please enter email and password');
         }
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
+        const rawEmail = credentials.email.trim();
+        const normalizedEmail = rawEmail.toLowerCase();
+
+        const user = await prisma.user.findFirst({
+          where: {
+            OR: [{ email: normalizedEmail }, { email: rawEmail }],
+          },
         });
 
         if (!user) {
@@ -32,6 +38,8 @@ export const authOptions: NextAuthOptions = {
         if (!isPasswordValid) {
           throw new Error('Invalid password');
         }
+
+        await syncUserCollaborations(user.id, user.email);
 
         return {
           id: user.id,

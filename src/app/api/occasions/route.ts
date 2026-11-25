@@ -3,6 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { generateAccessCode } from '@/lib/storage';
+import { syncUserCollaborations } from '@/lib/occasion-access';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,17 +14,43 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = session.user.id;
+    const userEmail = session.user.email?.trim().toLowerCase();
+    await syncUserCollaborations(userId, userEmail);
+
     const occasions = await prisma.occasion.findMany({
-      where: { userId: (session.user as any).id },
+      where: {
+        OR: [
+          { userId },
+          {
+            collaborators: {
+              some: {
+                status: 'ACCEPTED',
+                OR: [
+                  { userId },
+                  ...(userEmail ? [{ invitedEmail: userEmail }] : []),
+                ],
+              },
+            },
+          },
+        ],
+      },
       include: {
+        user: { select: { name: true } },
         _count: {
-          select: { photos: true },
+          select: { photos: true, collaborators: true },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json(occasions);
+    const formatted = occasions.map((o) => ({
+      ...o,
+      role: o.userId === userId ? 'OWNER' : 'EDITOR',
+      ownerName: o.user.name,
+    }));
+
+    return NextResponse.json(formatted);
   } catch (error) {
     console.error('Error fetching occasions:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -36,13 +65,22 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, description, date } = body;
+    const {
+      name,
+      description,
+      date,
+      accentColor,
+      brandName,
+      photographerBio,
+      logoUrl,
+      slideshowEnabled,
+      slideshowInterval,
+    } = body;
 
     if (!name || !date) {
       return NextResponse.json({ error: 'Name and date are required' }, { status: 400 });
     }
 
-    // Generate unique access code
     let accessCode = generateAccessCode();
     let codeExists = await prisma.occasion.findUnique({ where: { accessCode } });
     while (codeExists) {
@@ -52,11 +90,17 @@ export async function POST(request: NextRequest) {
 
     const occasion = await prisma.occasion.create({
       data: {
-        name,
-        description: description || null,
+        name: name.trim(),
+        description: description?.trim() || null,
         date: new Date(date),
         accessCode,
-        userId: (session.user as any).id,
+        accentColor: accentColor || '#18181b',
+        brandName: brandName?.trim() || null,
+        photographerBio: photographerBio?.trim() || null,
+        logoUrl: logoUrl?.trim() || null,
+        slideshowEnabled: Boolean(slideshowEnabled),
+        slideshowInterval: typeof slideshowInterval === 'number' ? Math.max(2, Math.min(60, slideshowInterval)) : 5,
+        userId: session.user.id,
       },
     });
 

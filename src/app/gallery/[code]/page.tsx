@@ -1,272 +1,382 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import {
-  Camera, Scan, Image as ImageIcon, Loader2,
-  Calendar, User, Download, AlertCircle
-} from 'lucide-react';
-import PhotoGallery from '@/components/PhotoGallery';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import PhotoGallery, { GalleryPhoto } from '@/components/PhotoGallery';
 import CameraCapture from '@/components/CameraCapture';
+import DeliveryPanel from '@/components/DeliveryPanel';
+import SmartAlbumsSection from '@/components/SmartAlbumsSection';
+import BrandMark from '@/components/BrandMark';
 import { formatDate } from '@/lib/utils';
-
-interface Photo {
-  id: string;
-  fileName: string;
-  thumbnailPath: string | null;
-  originalPath: string;
-  fileSize: number;
-  mimeType: string;
-  width: number | null;
-  height: number | null;
-  createdAt: string;
-}
+import type { SmartAlbumPerson, SmartAlbumCategory } from '@/lib/smart-albums';
 
 interface GalleryData {
   id: string;
   name: string;
   description: string | null;
   date: string;
+  accessCode: string;
   photographerName: string;
+  brandName: string | null;
+  accentColor: string;
+  logoUrl: string | null;
+  photographerBio: string | null;
+  slideshowEnabled: boolean;
   photoCount: number;
-  photos: Photo[];
+  photos: GalleryPhoto[];
 }
 
-type ViewMode = 'gallery' | 'face-scan' | 'face-results';
+type View = 'gallery' | 'scan' | 'results';
 
-export default function GalleryPage() {
+function GalleryContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const code = params.code as string;
+  const initialPhotoId = searchParams.get('photo');
+
   const [gallery, setGallery] = useState<GalleryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('gallery');
-  const [matchedPhotos, setMatchedPhotos] = useState<Photo[]>([]);
-  const [matchLoading, setMatchLoading] = useState(false);
+  const [view, setView] = useState<View>('gallery');
+
+  const [matched, setMatched] = useState<GalleryPhoto[]>([]);
+  const [matching, setMatching] = useState(false);
   const [matchError, setMatchError] = useState<string | null>(null);
 
+  const [smartPeople, setSmartPeople] = useState<SmartAlbumPerson[]>([]);
+  const [smartCategories, setSmartCategories] = useState<SmartAlbumCategory[]>([]);
+  const [activeAlbumId, setActiveAlbumId] = useState<string | null>(null);
+  const [activeAlbumPhotoIds, setActiveAlbumPhotoIds] = useState<string[] | null>(null);
+
+  const [deliverIds, setDeliverIds] = useState<string[] | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
+  const viewRecordedRef = useRef(false);
+
   useEffect(() => {
-    fetchGallery();
+    Promise.all([
+      fetch(`/api/gallery/${code}`).then((r) => r.json()),
+      fetch(`/api/gallery/${code}/albums`).then((r) => r.json()).catch(() => null),
+    ])
+      .then(([galleryData, albumsData]) => {
+        if (galleryData?.id) {
+          setGallery(galleryData);
+          if (!viewRecordedRef.current) {
+            viewRecordedRef.current = true;
+            fetch(`/api/gallery/${code}/events`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ eventType: 'GALLERY_VIEW' }),
+            }).catch(() => {});
+          }
+        } else {
+          setError(galleryData?.error || 'Gallery not found');
+        }
+        if (albumsData?.people) {
+          setSmartPeople(albumsData.people);
+          setSmartCategories(albumsData.categories || []);
+        }
+      })
+      .catch(() => setError('Could not load gallery'))
+      .finally(() => setLoading(false));
   }, [code]);
 
-  const fetchGallery = async () => {
-    try {
-      const res = await fetch(`/api/gallery/${code}`);
-      const data = await res.json();
-      if (res.ok) {
-        setGallery(data);
-      } else {
-        setError(data.error || 'Gallery not found');
-      }
-    } catch (err) {
-      setError('Failed to load gallery');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const filteredPhotos = useMemo(() => {
+    if (!gallery) return [];
+    if (!activeAlbumPhotoIds) return gallery.photos;
+    const allowed = new Set(activeAlbumPhotoIds);
+    return gallery.photos.filter((p) => allowed.has(p.id));
+  }, [gallery, activeAlbumPhotoIds]);
 
-  const handleSelfieCapture = async (imageBlob: Blob, descriptor?: number[]) => {
-    setMatchLoading(true);
+  const handleSelfie = async (blob: Blob, descriptor?: number[]) => {
+    setMatching(true);
     setMatchError(null);
-
     try {
       let res: Response;
-
-      if (descriptor && descriptor.length === 128) {
-        // High accuracy: send 128-d neural network face embedding directly
+      if (descriptor?.length === 128) {
         res = await fetch('/api/face/match', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accessCode: code,
-            descriptor,
-          }),
+          body: JSON.stringify({ accessCode: code, descriptor }),
         });
       } else {
-        // Fallback: send image blob
-        const formData = new FormData();
-        formData.append('selfie', imageBlob, 'selfie.jpg');
-        formData.append('accessCode', code);
-
-        res = await fetch('/api/face/match', {
-          method: 'POST',
-          body: formData,
-        });
+        const form = new FormData();
+        form.append('selfie', blob, 'selfie.jpg');
+        form.append('accessCode', code);
+        res = await fetch('/api/face/match', { method: 'POST', body: form });
       }
-
       const data = await res.json();
-
       if (res.ok) {
-        setMatchedPhotos(data.matches);
-        setViewMode('face-results');
+        setMatched(data.matches);
+        setView('results');
       } else {
-        setMatchError(data.error || 'Face matching failed');
+        setMatchError(data.error || 'Matching failed');
       }
-    } catch (err) {
-      setMatchError('Failed to process face matching. Please try again.');
+    } catch {
+      setMatchError('Something went wrong. Please try again.');
     } finally {
-      setMatchLoading(false);
+      setMatching(false);
     }
+  };
+
+  const shareGalleryLink = async () => {
+    const url = window.location.href.split('?')[0];
+    fetch(`/api/gallery/${code}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventType: 'SHARE' }),
+    }).catch(() => {});
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: gallery?.name || 'Event Gallery',
+          text: `Browse photos from ${gallery?.name}`,
+          url,
+        });
+        return;
+      } catch {
+        // Fallback to copy
+      }
+    }
+    await navigator.clipboard.writeText(url);
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 2000);
   };
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-primary-600 mb-4" />
-        <p className="text-gray-500">Loading gallery...</p>
+        <div className="w-5 h-5 border-2 border-neutral-200 border-t-neutral-900 rounded-full animate-spin" />
+        <p className="text-xs font-mono text-neutral-400 mt-3">Loading gallery...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
-        <AlertCircle className="h-16 w-16 text-gray-300 mb-4" />
-        <h1 className="text-xl font-semibold text-gray-900 mb-2">Gallery Not Found</h1>
-        <p className="text-gray-500 text-center">{error}</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 text-center">
+        <p className="text-sm font-medium text-neutral-800">{error}</p>
+        <p className="text-xs text-neutral-400 mt-1">Verify your QR code or access code.</p>
       </div>
     );
   }
 
   if (!gallery) return null;
 
+  const accent = gallery.accentColor || '#18181b';
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      {/* Gallery Header */}
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">{gallery.name}</h1>
-        {gallery.description && (
-          <p className="text-gray-500 mt-2">{gallery.description}</p>
-        )}
-        <div className="flex items-center justify-center space-x-4 mt-3 text-sm text-gray-400">
-          <div className="flex items-center space-x-1">
-            <Calendar className="h-4 w-4" />
-            <span>{formatDate(gallery.date)}</span>
+    <div>
+      {/* Custom branded hairline rule */}
+      <div className="h-[3px] w-full" style={{ backgroundColor: accent }} />
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+        {/* Branded Gallery Header */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 pb-8 mb-8 border-b border-neutral-200">
+          <div className="flex items-start gap-4">
+            <BrandMark
+              logoUrl={gallery.logoUrl}
+              name={gallery.photographerName}
+              accentColor={accent}
+              size="lg"
+            />
+            <div>
+              <p className="text-[11px] font-mono text-neutral-400 uppercase tracking-wider">
+                {gallery.photographerName} · {formatDate(gallery.date)}
+              </p>
+              <h1 className="text-2xl sm:text-3xl font-display font-bold tracking-tighter text-neutral-900 mt-1">
+                {gallery.name}
+              </h1>
+              {gallery.description && (
+                <p className="text-sm text-neutral-600 mt-2 max-w-prose">
+                  {gallery.description}
+                </p>
+              )}
+              {gallery.photographerBio && (
+                <p className="text-xs text-neutral-400 mt-1.5">{gallery.photographerBio}</p>
+              )}
+            </div>
           </div>
-          <div className="flex items-center space-x-1">
-            <User className="h-4 w-4" />
-            <span>by {gallery.photographerName}</span>
-          </div>
-          <div className="flex items-center space-x-1">
-            <ImageIcon className="h-4 w-4" />
-            <span>{gallery.photoCount} photos</span>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              onClick={() => setView('scan')}
+              className="text-xs font-medium py-2 px-4 rounded transition-opacity duration-150"
+              style={
+                view === 'scan' || view === 'results'
+                  ? { backgroundColor: accent, color: '#ffffff' }
+                  : { backgroundColor: '#18181b', color: '#ffffff' }
+              }
+            >
+              Find my photos
+            </button>
+            <button
+              onClick={() => {
+                setView('gallery');
+                setDeliverIds(null);
+              }}
+              className={`text-xs font-medium py-2 px-4 rounded border transition-colors duration-150 ${
+                view === 'gallery'
+                  ? 'border-neutral-900 bg-neutral-100 text-neutral-900'
+                  : 'border-neutral-200 bg-white text-neutral-600 hover:border-neutral-400'
+              }`}
+            >
+              Browse all ({gallery.photoCount})
+            </button>
+            {gallery.slideshowEnabled && (
+              <Link
+                href={`/gallery/${code}/slideshow`}
+                className="btn-secondary text-xs py-2 px-3"
+              >
+                Live slideshow ↗
+              </Link>
+            )}
+            <button
+              onClick={shareGalleryLink}
+              className="btn-secondary text-xs py-2 px-3"
+            >
+              {shareCopied ? 'Link copied' : 'Share gallery'}
+            </button>
           </div>
         </div>
-      </div>
 
-      {/* Action Buttons */}
-      <div className="flex flex-col sm:flex-row gap-3 justify-center mb-8">
-        <button
-          onClick={() => setViewMode('face-scan')}
-          className={`flex items-center justify-center space-x-2 py-3 px-6 rounded-xl font-medium transition-all ${
-            viewMode === 'face-scan' || viewMode === 'face-results'
-              ? 'bg-primary-600 text-white shadow-lg shadow-primary-200'
-              : 'bg-primary-50 text-primary-700 hover:bg-primary-100'
-          }`}
-        >
-          <Scan className="h-5 w-5" />
-          <span>Find My Photos</span>
-        </button>
-        <button
-          onClick={() => setViewMode('gallery')}
-          className={`flex items-center justify-center space-x-2 py-3 px-6 rounded-xl font-medium transition-all ${
-            viewMode === 'gallery'
-              ? 'bg-primary-600 text-white shadow-lg shadow-primary-200'
-              : 'bg-primary-50 text-primary-700 hover:bg-primary-100'
-          }`}
-        >
-          <ImageIcon className="h-5 w-5" />
-          <span>Browse All Photos</span>
-        </button>
-      </div>
-
-      {/* Content based on view mode */}
-      {viewMode === 'gallery' && (
-        <PhotoGallery photos={gallery.photos} selectable={true} />
-      )}
-
-      {viewMode === 'face-scan' && (
-        <div className="max-w-lg mx-auto">
-          <div className="card">
-            <div className="text-center mb-6">
-              <div className="h-16 w-16 bg-primary-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Camera className="h-8 w-8 text-primary-600" />
-              </div>
-              <h2 className="text-xl font-semibold text-gray-900">Find Your Photos</h2>
-              <p className="text-gray-500 text-sm mt-1">
-                Take a quick selfie and our AI will find all photos you appear in
-              </p>
-            </div>
-
-            {matchError && (
-              <div className="flex items-center space-x-2 p-3 bg-red-50 border border-red-200 rounded-lg mb-4">
-                <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0" />
-                <p className="text-sm text-red-600">{matchError}</p>
-              </div>
+        {/* Gallery & Smart Albums */}
+        {view === 'gallery' && (
+          <div className="space-y-6">
+            {deliverIds && deliverIds.length > 0 && (
+              <DeliveryPanel
+                accessCode={code}
+                occasionName={gallery.name}
+                photoIds={deliverIds}
+                accentColor={accent}
+              />
             )}
 
-            <CameraCapture
-              onCapture={handleSelfieCapture}
-              onCancel={() => setViewMode('gallery')}
-              loading={matchLoading}
+            <SmartAlbumsSection
+              people={smartPeople}
+              categories={smartCategories}
+              activeAlbumId={activeAlbumId}
+              onSelectAlbum={(id, photoIds) => {
+                setActiveAlbumId(id);
+                setActiveAlbumPhotoIds(photoIds);
+              }}
+              accentColor={accent}
+            />
+
+            <PhotoGallery
+              photos={filteredPhotos}
+              selectable={true}
+              accessCode={code}
+              accentColor={accent}
+              initialPhotoId={initialPhotoId}
+              onDeliverSelected={(ids) => setDeliverIds(ids)}
             />
           </div>
-        </div>
-      )}
+        )}
 
-      {viewMode === 'face-results' && (
-        <div>
-          <div className="text-center mb-6">
-            <div className="inline-flex items-center space-x-2 bg-green-50 text-green-700 px-4 py-2 rounded-full">
-              <Scan className="h-5 w-5" />
-              <span className="font-medium">
-                Found {matchedPhotos.length} photo{matchedPhotos.length !== 1 ? 's' : ''} of you!
-              </span>
-            </div>
-          </div>
-
-          {matchedPhotos.length > 0 ? (
-            <PhotoGallery photos={matchedPhotos} selectable={true} />
-          ) : (
-            <div className="text-center py-12 card max-w-lg mx-auto">
-              <ImageIcon className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No matches found</h3>
-              <p className="text-gray-500 text-sm mb-6">
-                We couldn&apos;t find photos matching your face. This could happen if the photos are still being processed or if lighting conditions differ.
+        {/* Face Scan */}
+        {view === 'scan' && (
+          <div className="max-w-md mx-auto py-4">
+            <div className="text-center mb-6">
+              <p className="text-[11px] font-mono text-neutral-400 uppercase tracking-wider">
+                Face search
               </p>
-              <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <button
-                  onClick={() => setViewMode('face-scan')}
-                  className="btn-primary text-sm"
-                >
-                  Try Again
+              <h2 className="text-xl font-display font-semibold text-neutral-900 tracking-tight mt-1">
+                Find every photo you appear in
+              </h2>
+              <p className="text-xs text-neutral-500 mt-1.5">
+                Position your face inside the frame and take one quick selfie.
+              </p>
+            </div>
+            {matchError && (
+              <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-4">
+                {matchError}
+              </div>
+            )}
+            <CameraCapture
+              onCapture={handleSelfie}
+              onCancel={() => setView('gallery')}
+              loading={matching}
+              accentColor={accent}
+            />
+          </div>
+        )}
+
+        {/* Face Match Results + Delivery */}
+        {view === 'results' && (
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-mono text-neutral-400 uppercase tracking-wider">
+                  Match results
+                </p>
+                <h2 className="text-lg font-display font-semibold text-neutral-900 mt-0.5">
+                  {matched.length} photo{matched.length === 1 ? '' : 's'} matched your selfie
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setView('scan')} className="btn-secondary text-xs py-1.5 px-3">
+                  Scan again
                 </button>
-                <button
-                  onClick={() => setViewMode('gallery')}
-                  className="btn-secondary text-sm"
-                >
-                  Browse All Photos
+                <button onClick={() => setView('gallery')} className="btn-secondary text-xs py-1.5 px-3">
+                  Browse full gallery
                 </button>
               </div>
             </div>
-          )}
 
-          <div className="text-center mt-6">
-            <button
-              onClick={() => setViewMode('face-scan')}
-              className="text-sm text-primary-600 hover:text-primary-700 font-medium mr-4"
-            >
-              Scan Again
-            </button>
-            <button
-              onClick={() => setViewMode('gallery')}
-              className="text-sm text-gray-500 hover:text-gray-700"
-            >
-              View All Photos
-            </button>
+            {matched.length > 0 ? (
+              <>
+                <DeliveryPanel
+                  accessCode={code}
+                  occasionName={gallery.name}
+                  photoIds={matched.map((p) => p.id)}
+                  accentColor={accent}
+                />
+                <PhotoGallery
+                  photos={matched}
+                  selectable={true}
+                  accessCode={code}
+                  accentColor={accent}
+                />
+              </>
+            ) : (
+              <div className="border border-dashed border-neutral-200 rounded py-14 text-center px-4">
+                <p className="text-sm font-medium text-neutral-800">No matching photos found</p>
+                <p className="text-xs text-neutral-500 mt-1.5 max-w-md mx-auto">
+                  Photos may still be indexing, or lighting differed significantly from your selfie. Try scanning again or browse the Smart Albums.
+                </p>
+                <div className="flex justify-center gap-2.5 mt-5">
+                  <button
+                    onClick={() => setView('scan')}
+                    className="text-white text-xs font-medium px-4 py-2 rounded"
+                    style={{ backgroundColor: accent }}
+                  >
+                    Try another selfie
+                  </button>
+                  <button onClick={() => setView('gallery')} className="btn-secondary text-xs">
+                    Browse all photos
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
+  );
+}
+
+export default function GalleryPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="w-5 h-5 border-2 border-neutral-200 border-t-neutral-900 rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <GalleryContent />
+    </Suspense>
   );
 }

@@ -11,6 +11,24 @@ export interface PhotoData {
   createdAt: string;
   occasionId: string;
   uploadedById: string;
+  uploadedBy?: {
+    id: string;
+    name: string;
+  };
+}
+
+export interface CollaboratorData {
+  id: string;
+  occasionId: string;
+  userId: string | null;
+  invitedEmail: string;
+  role: string;
+  status: string;
+  createdAt: string;
+  user?: {
+    name: string;
+    email: string;
+  } | null;
 }
 
 export interface OccasionData {
@@ -21,8 +39,16 @@ export interface OccasionData {
   accessCode: string;
   coverImage: string | null;
   isActive: boolean;
+  brandName?: string | null;
+  accentColor: string;
+  logoUrl?: string | null;
+  photographerBio?: string | null;
+  slideshowEnabled: boolean;
+  slideshowInterval: number;
   createdAt: string;
   userId: string;
+  role?: 'OWNER' | 'EDITOR';
+  ownerName?: string;
   _count?: {
     photos: number;
   };
